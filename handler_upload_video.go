@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -93,8 +99,26 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// get the aspect ration
+	ratio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get ratio", err)
+		return
+	}
+
+	// get the correct prefix
+	var prefix string
+	switch ratio {
+	case "16:9":
+    	prefix = "landscape"
+	case "9:16":
+    	prefix = "portrait"
+	default:
+    	prefix = "other"
+	}
+
 	// get the bucket key
-	key := getAssetPath(mediaType)
+	key := prefix + "/" + getAssetPath(mediaType)
 
 	// upload the video to s3
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
@@ -120,4 +144,41 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var outputBuffer bytes.Buffer
+	cmd.Stdout = &outputBuffer
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffprobe error: %v", err)
+	}
+
+	type FFProbeResponse struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	var response FFProbeResponse
+    if err := json.Unmarshal(outputBuffer.Bytes(), &response); err != nil {
+        return "", fmt.Errorf("couldn't unmarshal JSON: %v", err)
+    }
+
+	if len(response.Streams) == 0 {
+        return "", errors.New("no video streams found")
+    }
+
+	ratioCalc := float64(response.Streams[0].Width) / float64(response.Streams[0].Height) 
+	ratioString := ""
+	if math.Abs(ratioCalc - 1.78) < 0.05 {
+		ratioString = "16:9"
+	} else if math.Abs(ratioCalc - 0.5625) < 0.05 {
+		ratioString = "9:16"
+	} else {
+		ratioString = "other"
+	}
+	return ratioString, nil
 }
