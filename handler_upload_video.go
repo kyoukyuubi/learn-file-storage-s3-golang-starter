@@ -150,7 +150,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	// set the video url and update the video in memory
-	videoURL := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
+	videoURL := cfg.getObjectURL(key)
 	video.VideoURL = &videoURL
 
 	// udate the video URL in database
@@ -160,14 +160,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// get video with presigned url
-	presignVideo, err := cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't get presign url", err)
-		return
-	}
-
-	respondWithJSON(w, http.StatusOK, presignVideo)
+	respondWithJSON(w, http.StatusOK, video)
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
